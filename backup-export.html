@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Punyarchane — Guest List Backup Export</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  body{
+    margin:0;
+    font-family:'Karla',Arial,sans-serif;
+    background:#120d0a;
+    color:#f2e9d8;
+    min-height:100vh;
+    padding:24px 16px 60px;
+  }
+  .wrap{max-width:600px;margin:0 auto;}
+  h1{
+    font-size:22px;
+    color:#e8c874;
+    margin-bottom:4px;
+  }
+  .sub{
+    font-size:13px;
+    color:#b9ab8f;
+    margin-bottom:24px;
+  }
+  .card{
+    background:#1c1611;
+    border:1px solid #4a3a26;
+    border-radius:4px;
+    padding:20px;
+    margin-bottom:16px;
+  }
+  .status{
+    font-size:14px;
+    margin-bottom:12px;
+  }
+  .status.ok{color:#7fae7a;}
+  .status.err{color:#d98a7d;}
+  .status.loading{color:#cda449;}
+  button{
+    width:100%;
+    padding:14px;
+    background:#7a2432;
+    color:#f6ece2;
+    border:1px solid #b1414f;
+    font-size:15px;
+    font-weight:700;
+    border-radius:3px;
+    cursor:pointer;
+    margin-top:8px;
+  }
+  button:disabled{opacity:.4;cursor:default;}
+  button.secondary{
+    background:transparent;
+    border:1px solid #cda449;
+    color:#e8c874;
+  }
+  .stat-row{
+    display:flex;
+    justify-content:space-between;
+    font-size:13px;
+    color:#b9ab8f;
+    padding:6px 0;
+    border-bottom:1px dashed #4a3a26;
+  }
+  .stat-row b{color:#f2e9d8;}
+  textarea{
+    width:100%;
+    min-height:300px;
+    background:#0d0a08;
+    color:#f2e9d8;
+    border:1px solid #4a3a26;
+    padding:12px;
+    font-family:monospace;
+    font-size:12px;
+    border-radius:3px;
+    box-sizing:border-box;
+    margin-top:12px;
+  }
+  .hidden{display:none;}
+  .note{
+    font-size:11.5px;
+    color:#b9ab8f;
+    line-height:1.6;
+    margin-top:14px;
+  }
+
+  /* ---------- Printable sheet (hidden on screen, shown on print) ---------- */
+  #printSheet{display:none;}
+
+  @media print{
+    body *{visibility:hidden;}
+    #printSheet, #printSheet *{visibility:visible;}
+    #printSheet{
+      display:block;
+      position:absolute;
+      top:0; left:0;
+      width:100%;
+      background:#fff;
+      color:#000;
+      padding:0;
+      font-family:Arial,sans-serif;
+    }
+    #printSheet h2{font-size:18px;margin:0 0 2px;}
+    #printSheet .psub{font-size:11px;color:#333;margin-bottom:10px;}
+    #printSheet table{width:100%;border-collapse:collapse;font-size:11px;}
+    #printSheet th, #printSheet td{
+      border:1px solid #999;
+      padding:5px 6px;
+      text-align:left;
+    }
+    #printSheet th{background:#eee;}
+    #printSheet .psummary{font-size:12px;margin-bottom:10px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Punyarchane 2026 — Guest List Backup</h1>
+  <div class="sub">Run this once with internet on to pull the latest list, then save the downloaded file to your phone. That file works with no internet at the venue.</div>
+
+  <div class="card">
+    <div class="status loading" id="statusLine">Connecting to database…</div>
+    <div id="statsBlock" class="hidden">
+      <div class="stat-row"><span>Total bookings</span><b id="statBookings">0</b></div>
+      <div class="stat-row"><span>Total passes</span><b id="statPasses">0</b></div>
+      <div class="stat-row"><span>Total collected</span><b id="statRevenue">₹0</b></div>
+    </div>
+    <button id="downloadBtn" disabled>Download Guest List (.txt)</button>
+    <button id="printBtn" class="secondary" disabled>Print Guest List (paper backup)</button>
+    <button id="refreshBtn" class="secondary" disabled>Refresh from database</button>
+  </div>
+
+  <div class="card hidden" id="previewCard">
+    <div class="sub" style="margin-bottom:8px;">Preview (this is what gets downloaded):</div>
+    <textarea id="previewText" readonly></textarea>
+  </div>
+
+  <div class="note">
+    This page needs internet only to fetch the list. Once downloaded, the .txt file is a plain readable file — open it in any Notes app, text editor, or even email it to yourself for offline access on the day of the event.<br><br>
+    Run this again the morning of the event to get the most up-to-date list before heading to the venue.
+  </div>
+</div>
+
+<!-- Printable version — only visible when printing -->
+<div id="printSheet">
+  <h2>Punyarchane 2026 — Guest List</h2>
+  <div class="psub">Jatin Academy of Dance · 26 Aug 2026, 6:00 PM · Seva Sadan, Malleshwaram</div>
+  <div class="psummary" id="printSummary"></div>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Name</th>
+        <th>Mobile</th>
+        <th>Passes</th>
+        <th>Ticket ID</th>
+        <th>Checked In</th>
+      </tr>
+    </thead>
+    <tbody id="printTableBody"></tbody>
+  </table>
+</div>
+
+<script>
+(function(){
+  var firebaseConfig = {
+    apiKey: "AIzaSyAKJ44CQnTeTGTCmoGK2ekw-gCYtM_qr_Q",
+    authDomain: "punyarchane-2026.firebaseapp.com",
+    projectId: "punyarchane-2026",
+    storageBucket: "punyarchane-2026.firebasestorage.app",
+    messagingSenderId: "146100375990",
+    appId: "1:146100375990:web:2229fed080fd8bb2e53117",
+    measurementId: "G-KLLWESLXVP"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  var db = firebase.firestore();
+
+  var statusLine = document.getElementById('statusLine');
+  var statsBlock = document.getElementById('statsBlock');
+  var downloadBtn = document.getElementById('downloadBtn');
+  var printBtn = document.getElementById('printBtn');
+  var refreshBtn = document.getElementById('refreshBtn');
+  var previewCard = document.getElementById('previewCard');
+  var previewText = document.getElementById('previewText');
+
+  var currentBookings = [];
+  var generatedText = '';
+
+  function loadBookings(){
+    statusLine.textContent = 'Connecting to database…';
+    statusLine.className = 'status loading';
+    downloadBtn.disabled = true;
+    refreshBtn.disabled = true;
+
+    db.collection('bookings').orderBy('bookedAt', 'asc').get().then(function(snapshot){
+      currentBookings = [];
+      snapshot.forEach(function(doc){ currentBookings.push(doc.data()); });
+
+      if (currentBookings.length === 0){
+        statusLine.textContent = 'Connected — but no bookings found yet.';
+        statusLine.className = 'status ok';
+        refreshBtn.disabled = false;
+        return;
+      }
+
+      var passes = 0, revenue = 0;
+      currentBookings.forEach(function(b){
+        passes += (b.passes || 0);
+        revenue += (b.amount || 0);
+      });
+
+      document.getElementById('statBookings').textContent = currentBookings.length;
+      document.getElementById('statPasses').textContent = passes;
+      document.getElementById('statRevenue').textContent = '₹' + revenue;
+      statsBlock.classList.remove('hidden');
+
+      statusLine.textContent = 'Loaded successfully. Ready to download.';
+      statusLine.className = 'status ok';
+
+      generatedText = buildTextFile(currentBookings, passes, revenue);
+      previewText.value = generatedText;
+      previewCard.classList.remove('hidden');
+
+      populatePrintSheet(currentBookings, passes, revenue);
+
+      downloadBtn.disabled = false;
+      printBtn.disabled = false;
+      refreshBtn.disabled = false;
+    }).catch(function(err){
+      console.error(err);
+      statusLine.textContent = 'Could not connect. Check your internet connection and try again.';
+      statusLine.className = 'status err';
+      refreshBtn.disabled = false;
+    });
+  }
+
+  function populatePrintSheet(bookings, passes, revenue){
+    var now = new Date();
+    document.getElementById('printSummary').textContent =
+      'Exported: ' + now.toLocaleString() +
+      '  |  Total bookings: ' + bookings.length +
+      '  |  Total passes: ' + passes +
+      '  |  Total collected: Rs.' + revenue;
+
+    var tbody = document.getElementById('printTableBody');
+    tbody.innerHTML = '';
+    bookings.forEach(function(b, i){
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + (i+1) + '</td>' +
+        '<td>' + escapeHtml(b.name || '-') + '</td>' +
+        '<td>' + escapeHtml(b.mobile || '-') + '</td>' +
+        '<td>' + (b.passes || '-') + '</td>' +
+        '<td>' + escapeHtml(b.ticketId || '-') + '</td>' +
+        '<td>' + (b.checkedIn ? 'YES' : '') + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function buildTextFile(bookings, passes, revenue){
+    var now = new Date();
+    var lines = [];
+    lines.push('PUNYARCHANE 2026 — GUEST LIST BACKUP');
+    lines.push('Jatin Academy of Dance');
+    lines.push('26 Aug 2026, 6:00 PM, Seva Sadan, Malleshwaram');
+    lines.push('Exported: ' + now.toLocaleString());
+    lines.push('');
+    lines.push('SUMMARY');
+    lines.push('Total bookings: ' + bookings.length);
+    lines.push('Total passes: ' + passes);
+    lines.push('Total collected: Rs.' + revenue);
+    lines.push('');
+    lines.push('----------------------------------------');
+    lines.push('GUEST LIST (in booking order)');
+    lines.push('----------------------------------------');
+    lines.push('');
+
+    bookings.forEach(function(b, i){
+      lines.push((i+1) + '. ' + (b.name || 'Unknown'));
+      lines.push('   Mobile: ' + (b.mobile || '-'));
+      lines.push('   Passes: ' + (b.passes || '-') + '   Amount: Rs.' + (b.amount || '-'));
+      lines.push('   Ticket ID: ' + (b.ticketId || '-'));
+      lines.push('   Checked in: ' + (b.checkedIn ? 'YES' : 'No'));
+      lines.push('');
+    });
+
+    lines.push('----------------------------------------');
+    lines.push('End of list.');
+    return lines.join('\n');
+  }
+
+  downloadBtn.addEventListener('click', function(){
+    var blob = new Blob([generatedText], {type: 'text/plain'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    var dateStamp = new Date().toISOString().slice(0,10);
+    a.href = url;
+    a.download = 'punyarchane-guestlist-' + dateStamp + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  printBtn.addEventListener('click', function(){
+    window.print();
+  });
+
+  refreshBtn.addEventListener('click', loadBookings);
+
+  loadBookings();
+})();
+</script>
+</body>
+</html>
